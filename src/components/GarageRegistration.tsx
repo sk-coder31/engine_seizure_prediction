@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { ArrowLeft, MapPin, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { useGeolocation } from '../hooks/useGeolocation';
+// import GarageStatsPage from './GarageDashboard';
+import axios from 'axios';
 
 interface GarageRegistrationProps {
   onBack: () => void;
@@ -32,6 +34,9 @@ export const GarageRegistration = ({ onBack }: GarageRegistrationProps) => {
     services: [] as string[],
     workingHours: '',
     gstNumber: '',
+    address: '',
+    email: '', // Added email
+    password: '', // Added password
   });
 
   const [registeredData, setRegisteredData] = useState({
@@ -54,22 +59,44 @@ export const GarageRegistration = ({ onBack }: GarageRegistrationProps) => {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsRegistered(true);
-    setRegisteredData({
-      dailyVisits: 0,
-      totalVisits: 0,
-      incomingUsers: Math.floor(Math.random() * 5),
-    });
 
-    setInterval(() => {
-      setRegisteredData(prev => ({
-        dailyVisits: prev.dailyVisits + Math.floor(Math.random() * 2),
-        totalVisits: prev.totalVisits + Math.floor(Math.random() * 2),
-        incomingUsers: Math.floor(Math.random() * 8),
-      }));
-    }, 5000);
+    if (!latitude || !longitude) {
+      alert('Location not available. Please allow location access and try again.');
+      return;
+    }
+
+    const payload = {
+      email: formData.email,
+      password: formData.password,
+      owner_name: formData.ownerName,
+      garage_name: formData.garageName,
+      phone_number: formData.phoneNumber,
+      address: formData.address,
+      // services: formData.services,
+      // working_hours: formData.workingHours,
+      // gst_number: formData.gstNumber,
+      latitude,
+      longitude,
+    };
+
+    try {
+      const response = await axios.post('http://localhost:3000/api/register', payload, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      console.log('Registration successful:', response.data);
+
+      setRegisteredData({
+        dailyVisits: 0,
+        totalVisits: 0,
+        incomingUsers: 0,
+      });
+      setIsRegistered(true);
+    } catch (error) {
+      console.error('Registration error:', error);
+      alert('Registration failed. Check console for details.');
+    }
   };
 
   if (isRegistered) {
@@ -333,6 +360,47 @@ export const GarageRegistration = ({ onBack }: GarageRegistrationProps) => {
                 placeholder="+1234567890"
               />
             </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="bg-gradient-to-br from-black to-red-950 border-3 border-red-900 p-6">
+              <label className="block text-red-500 font-black text-sm mb-2 uppercase tracking-widest">
+                Email *
+              </label>
+              <input
+                type="email"
+                required
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                className="w-full bg-black border-2 border-red-900 text-white px-4 py-3 focus:border-red-600 focus:outline-none font-bold"
+                placeholder="example@domain.com"
+              />
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-black to-red-950 border-3 border-red-900 p-6">
+            <label className="block text-red-500 font-black text-sm mb-2 uppercase tracking-widest">
+              Password *
+            </label>
+            <input
+              type="password"
+              required
+              value={formData.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              className="w-full bg-black border-2 border-red-900 text-white px-4 py-3 focus:border-red-600 focus:outline-none font-bold"
+              placeholder="Create a password"
+            />
+          </div>
+          <div className="bg-gradient-to-br from-black to-red-950 border-3 border-red-900 p-6">
+            <label className="block text-red-500 font-black text-sm mb-2 uppercase tracking-widest">
+              Address *
+            </label>
+            <input
+              type="text"
+              required
+              value={formData.address}
+              onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+              className="w-full bg-black border-2 border-red-900 text-white px-4 py-3 focus:border-red-600 focus:outline-none font-bold"
+              placeholder="Enter your garage address"
+            />
           </div>
 
           <div className="bg-gradient-to-br from-red-950 to-black border-3 border-red-600 p-6 shadow-[0_0_20px_rgba(239,68,68,0.3)]">

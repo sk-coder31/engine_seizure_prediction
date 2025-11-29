@@ -1,14 +1,93 @@
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import { Icon } from 'leaflet';
-import { Phone, MapPin, Clock, ArrowLeft } from 'lucide-react';
-import { useGeolocation } from '../hooks/useGeolocation';
-import { calculateDistance } from '../utils/distance';
-import { Garage } from '../types/garage';
+import { Phone, MapPin, Clock, ArrowLeft, Lock, Navigation } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
+import axios from 'axios';
 
 interface GarageFinderProps {
   onBack: () => void;
+}
+
+interface UseGeolocationReturn {
+  latitude: number | null;
+  longitude: number | null;
+  error: string | null;
+  loading: boolean;
+  requestLocation: () => void;
+}
+
+// Geolocation hook
+const useGeolocation = (): UseGeolocationReturn => {
+  const [state, setState] = useState<{
+    latitude: number | null;
+    longitude: number | null;
+    error: string | null;
+    loading: boolean;
+  }>({
+    latitude: null,
+    longitude: null,
+    error: null,
+    loading: false
+  });
+
+  const requestLocation = () => {
+    setState(prev => ({ ...prev, loading: true }));
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setState({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            error: null,
+            loading: false
+          });
+        },
+        (error) => {
+          setState(prev => ({
+            ...prev,
+            error: error.message,
+            loading: false
+          }));
+        }
+      );
+    } else {
+      setState(prev => ({
+        ...prev,
+        error: 'Geolocation is not supported by your browser',
+        loading: false
+      }));
+    }
+  };
+
+  return { ...state, requestLocation };
+};
+
+// Distance calculator
+const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return parseFloat((R * c).toFixed(1));
+};
+
+interface Garage {
+  id?: string;
+  key?: string;
+  garage_name: string;
+  owner_name: string;
+  phone_number: string;
+  address: string;
+  working_hours: string;
+  latitude: number;
+  longitude: number;
+  daily_visits: number;
+  total_visits: number;
+  distance?: number;
 }
 
 const userIcon = new Icon({
@@ -29,73 +108,124 @@ const garageIcon = new Icon({
   shadowSize: [41, 41]
 });
 
+// Component to update map center
+function ChangeMapView({ center }: { center: [number, number] }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, 15);
+  }, [center, map]);
+  return null;
+}
+
 export const GarageFinder = ({ onBack }: GarageFinderProps) => {
   const { latitude, longitude, error, loading, requestLocation } = useGeolocation();
   const [garages, setGarages] = useState<Garage[]>([]);
   const [searchRadius, setSearchRadius] = useState(10);
   const [selectedGarage, setSelectedGarage] = useState<Garage | null>(null);
+  const [lockedGarage, setLockedGarage] = useState<Garage | null>(null);
+  const [isRinging, setIsRinging] = useState(false);
+  
+  const garages_service: string[] = [
+    "OIL CHANGE",
+    "TIRE REPAIR",
+    "BRAKE SERVICE",
+  ];
   const [permissionRequested, setPermissionRequested] = useState(false);
 
-  useEffect(() => {
-    const mockGarages: Garage[] = [
-      {
-        id: '1',
-        owner_name: 'John Smith',
-        garage_name: 'Speed Demons Auto',
-        phone_number: '+1234567890',
-        address: '123 Main St, Downtown',
-        latitude: latitude ? latitude + 0.02 : 0,
-        longitude: longitude ? longitude + 0.02 : 0,
-        services: ['Oil Change', 'Brake Repair', 'Engine Tune-up'],
-        working_hours: '9 AM - 6 PM',
-        gst_number: 'GST123456',
-        daily_visits: 15,
-        total_visits: 1250,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: '2',
-        owner_name: 'Mike Johnson',
-        garage_name: 'Thunder Motors',
-        phone_number: '+1234567891',
-        address: '456 Oak Ave, Westside',
-        latitude: latitude ? latitude - 0.03 : 0,
-        longitude: longitude ? longitude + 0.01 : 0,
-        services: ['Tire Service', 'AC Repair', 'Body Work'],
-        working_hours: '8 AM - 8 PM',
-        daily_visits: 22,
-        total_visits: 3400,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: '3',
-        owner_name: 'David Rodriguez',
-        garage_name: 'Iron Horse Garage',
-        phone_number: '+1234567892',
-        address: '789 Pine Rd, Eastside',
-        latitude: latitude ? latitude + 0.01 : 0,
-        longitude: longitude ? longitude - 0.02 : 0,
-        services: ['Transmission', 'Suspension', 'Exhaust'],
-        working_hours: '10 AM - 7 PM',
-        gst_number: 'GST789012',
-        daily_visits: 18,
-        total_visits: 2100,
-        created_at: new Date().toISOString(),
-      },
-    ];
+  // Helper function to get garage identifier (key or id)
+  const getGarageId = (garage: Garage): string => {
+    return (garage as any).key || garage.id || (garage as any)._id || (garage as any).garage_id || '';
+  };
 
-    if (latitude && longitude) {
-      const filtered = mockGarages.filter(garage => {
-        const distance = calculateDistance(latitude, longitude, garage.latitude, garage.longitude);
-        return distance <= searchRadius;
-      });
-      setGarages(filtered);
-    }
+  useEffect(() => {
+    if (!latitude || !longitude) return;
+
+    let cancelled = false;
+
+    const fetchNearby = async () => {
+      try {
+        const response = await axios.get(
+          `http://localhost:3000/api/find-nearby/${latitude}/${longitude}/${searchRadius}`,
+          {
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+        
+        console.log('API response:', response.data.data);
+        const data = response.data?.data;
+        
+        if (!cancelled && data) {
+          // Log the first garage to see its structure
+          if (data.length > 0) {
+            console.log('Sample garage object from API:', data[0]);
+            console.log('Garage ID field:', data[0].id, data[0]._id, data[0].garage_id);
+          }
+          setGarages(data);
+        }
+      } catch (err) {
+        console.error('Error fetching nearby garages:', err);
+        if (!cancelled) {
+          setGarages([]);
+        }
+      }
+    };
+
+    fetchNearby();
+
+    return () => {
+      cancelled = true;
+    };
   }, [latitude, longitude, searchRadius]);
 
   const handleRequestLocation = () => {
     setPermissionRequested(true);
     requestLocation();
+  };
+
+  const handleLockGarage = () => {
+    if (selectedGarage) {
+      // Extract garage key - the API returns 'key' field
+      const garageKey = getGarageId(selectedGarage);
+      
+      if (!garageKey) {
+        console.error("Garage key is undefined! Full garage object:", JSON.stringify(selectedGarage, null, 2));
+        alert("Error: Garage key is missing. Please select a garage again.");
+        return;
+      }
+
+      setLockedGarage(selectedGarage);
+      
+      // Send ONLY the garageId key for Socket.IO notification
+      const payload = {
+        garageId: garageKey
+      };
+      
+      console.log("Sending notification with garageId key:", garageKey);
+      
+      axios.post(
+        "http://localhost:3000/notify",
+        payload,
+        {
+          headers: { 'Content-Type': 'application/json' }
+        }
+      ).then((res) => {
+        console.log("Notification response:", res.data);
+        console.log("Garage locked successfully");
+      }).catch((err) => {
+        console.error("Error locking garage:", err);
+        if (err.response) {
+          console.error("Error response data:", err.response.data);
+          console.error("Error response status:", err.response.status);
+        }
+        alert("Failed to notify garage. Check console for details.");
+      });
+    }
+  };
+
+  const handleCall = (phoneNumber: string) => {
+    setIsRinging(true);
+    setTimeout(() => setIsRinging(false), 2000);
+    window.location.href = `tel:${phoneNumber}`;
   };
 
   if (!permissionRequested) {
@@ -180,11 +310,10 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
     );
   }
 
-  if (!latitude || !longitude) {
-    return null;
-  }
+  if (!latitude || !longitude) return null;
 
-  const filteredGarages = garages.map(garage => ({
+  const displayGarages = lockedGarage ? [lockedGarage] : garages;
+  const filteredGarages = displayGarages.map(garage => ({
     ...garage,
     distance: calculateDistance(latitude, longitude, garage.latitude, garage.longitude)
   })).sort((a, b) => a.distance - b.distance);
@@ -200,39 +329,49 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
             <ArrowLeft className="w-5 h-5" />
             Back
           </button>
-          <h1 className="text-4xl font-black text-white tracking-wider"
-              style={{
-                textShadow: '0 0 15px rgba(239,68,68,0.6)',
-                fontFamily: 'Impact, Haettenschweiler, Arial Black, sans-serif'
-              }}>
-            GARAGE FINDER
-          </h1>
+          <div className="text-center">
+            <h1 className="text-4xl font-black text-white tracking-wider"
+                style={{
+                  textShadow: '0 0 15px rgba(239,68,68,0.6)',
+                  fontFamily: 'Impact, Haettenschweiler, Arial Black, sans-serif'
+                }}>
+              GARAGE FINDER
+            </h1>
+            {lockedGarage && (
+              <p className="text-green-400 mt-1 font-bold uppercase tracking-wider text-sm">
+                <Lock className="inline w-4 h-4 mr-1" />
+                Garage Locked
+              </p>
+            )}
+          </div>
           <div className="w-20"></div>
         </div>
       </div>
 
       <div className="flex h-[calc(100vh-88px)]">
         <div className="w-full md:w-2/5 bg-gradient-to-b from-gray-900 to-black border-r-4 border-red-600 overflow-hidden flex flex-col">
-          <div className="p-6 border-b-4 border-red-900">
-            <label className="block text-red-500 font-black text-sm mb-3 uppercase tracking-wider">
-              Search Radius: {searchRadius} KM
-            </label>
-            <input
-              type="range"
-              min="1"
-              max="50"
-              value={searchRadius}
-              onChange={(e) => setSearchRadius(Number(e.target.value))}
-              className="w-full h-3 bg-red-950 rounded-lg appearance-none cursor-pointer border-2 border-red-600"
-              style={{
-                background: `linear-gradient(to right, #dc2626 0%, #dc2626 ${((searchRadius - 1) / 49) * 100}%, #450a0a ${((searchRadius - 1) / 49) * 100}%, #450a0a 100%)`
-              }}
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-2 font-bold">
-              <span>1 KM</span>
-              <span>50 KM</span>
+          {!lockedGarage && (
+            <div className="p-6 border-b-4 border-red-900">
+              <label className="block text-red-500 font-black text-sm mb-3 uppercase tracking-wider">
+                Search Radius: {searchRadius} KM
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="100"
+                value={searchRadius}
+                onChange={(e) => setSearchRadius(Number(e.target.value))}
+                className="w-full h-3 bg-red-950 rounded-lg appearance-none cursor-pointer border-2 border-red-600"
+                style={{
+                  background: `linear-gradient(to right, #dc2626 0%, #dc2626 ${((searchRadius - 1) / 99) * 100}%, #450a0a ${((searchRadius - 1) / 99) * 100}%, #450a0a 100%)`
+                }}
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-2 font-bold">
+                <span>1 KM</span>
+                <span>100 KM</span>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {filteredGarages.length === 0 ? (
@@ -242,13 +381,16 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
                 </p>
               </div>
             ) : (
-              filteredGarages.map((garage) => (
+              filteredGarages.map((garage) => {
+                const garageId = getGarageId(garage);
+                const selectedId = selectedGarage ? getGarageId(selectedGarage) : null;
+                return (
                 <div
-                  key={garage.id}
-                  onClick={() => setSelectedGarage(garage)}
+                  key={garageId}
+                  onClick={() => !lockedGarage && setSelectedGarage(garage)}
                   className={`bg-gradient-to-br from-red-950 to-black border-3 ${
-                    selectedGarage?.id === garage.id ? 'border-red-500' : 'border-red-900'
-                  } p-5 cursor-pointer hover:border-red-600 transition-all duration-300 hover:shadow-[0_0_25px_rgba(239,68,68,0.4)]`}
+                    selectedId === garageId ? 'border-red-500' : 'border-red-900'
+                  } ${lockedGarage ? '' : 'cursor-pointer hover:border-red-600'} p-5 transition-all duration-300 hover:shadow-[0_0_25px_rgba(239,68,68,0.4)]`}
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div>
@@ -273,8 +415,16 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
 
                   <div className="space-y-2 mb-4">
                     <div className="flex items-center gap-2 text-gray-300">
-                      <Phone className="w-4 h-4 text-red-500" />
-                      <span className="font-bold">{garage.phone_number}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCall(garage.phone_number);
+                        }}
+                        className="flex items-center gap-2 hover:text-green-400 transition-colors"
+                      >
+                        <Phone className={`w-4 h-4 text-red-500 ${isRinging ? 'animate-bounce' : ''}`} />
+                        <span className="font-bold">{garage.phone_number}</span>
+                      </button>
                     </div>
                     <div className="flex items-center gap-2 text-gray-300">
                       <MapPin className="w-4 h-4 text-red-500" />
@@ -287,7 +437,7 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
                   </div>
 
                   <div className="flex flex-wrap gap-2 mb-4">
-                    {garage.services.slice(0, 3).map((service, idx) => (
+                    {garages_service.map((service, idx) => (
                       <span
                         key={idx}
                         className="bg-black border border-red-800 text-red-400 px-2 py-1 text-xs font-bold uppercase tracking-wide"
@@ -297,7 +447,7 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
                     ))}
                   </div>
 
-                  <div className="pt-3 border-t-2 border-red-900 flex justify-between text-xs">
+                  <div className="pt-3 border-t-2 border-red-900 flex justify-between text-xs mb-4">
                     <div className="text-gray-400">
                       <span className="font-bold uppercase">Today:</span>
                       <span className="text-red-500 ml-1 font-black">{garage.daily_visits}</span>
@@ -307,8 +457,40 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
                       <span className="text-red-500 ml-1 font-black">{garage.total_visits}</span>
                     </div>
                   </div>
+
+                  {selectedId === garageId && !lockedGarage && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleLockGarage();
+                      }}
+                      className="w-full bg-green-600 hover:bg-green-700 text-white font-black text-lg py-3 tracking-wider uppercase transition-all duration-300 border-2 border-green-500 flex items-center justify-center gap-2"
+                      style={{
+                        fontFamily: 'Impact, Haettenschweiler, Arial Black, sans-serif',
+                        boxShadow: '0 0 20px rgba(34,197,94,0.6)',
+                        textShadow: '0 0 10px rgba(34,197,94,0.8)'
+                      }}
+                    >
+                      <Lock className="w-5 h-5" />
+                      LOCK THE GARAGE
+                    </button>
+                  )}
+
+                  {lockedGarage && (
+                    <div className="space-y-2">
+                      <div className="bg-green-600 text-white font-black text-center py-2 border-2 border-green-500 flex items-center justify-center gap-2"
+                           style={{
+                             fontFamily: 'Impact, Haettenschweiler, Arial Black, sans-serif',
+                             boxShadow: '0 0 20px rgba(34,197,94,0.6)'
+                           }}>
+                        <Navigation className="w-5 h-5 animate-pulse" />
+                        NAVIGATING TO GARAGE
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -320,6 +502,10 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
             style={{ height: '100%', width: '100%' }}
             zoomControl={true}
           >
+            {lockedGarage && (
+              <ChangeMapView center={[(latitude + lockedGarage.latitude) / 2, (longitude + lockedGarage.longitude) / 2]} />
+            )}
+            
             <TileLayer
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -335,7 +521,7 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
 
             {filteredGarages.map((garage) => (
               <Marker
-                key={garage.id}
+                key={getGarageId(garage)}
                 position={[garage.latitude, garage.longitude]}
                 icon={garageIcon}
               >
@@ -349,16 +535,16 @@ export const GarageFinder = ({ onBack }: GarageFinderProps) => {
               </Marker>
             ))}
 
-            {selectedGarage && (
+            {(selectedGarage || lockedGarage) && (
               <Polyline
                 positions={[
                   [latitude, longitude],
-                  [selectedGarage.latitude, selectedGarage.longitude]
+                  [(lockedGarage || selectedGarage)!.latitude, (lockedGarage || selectedGarage)!.longitude]
                 ]}
-                color="#dc2626"
-                weight={3}
-                opacity={0.7}
-                dashArray="10, 10"
+                color={lockedGarage ? "#22c55e" : "#dc2626"}
+                weight={4}
+                opacity={0.8}
+                dashArray={lockedGarage ? undefined : "10, 10"}
               />
             )}
           </MapContainer>
